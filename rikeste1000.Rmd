@@ -1,0 +1,120 @@
+---
+title: "Norges 1000 Rikeste - 2013"
+author: "Turkuler"
+date: "7/7/2020"
+output: html_document
+---
+
+For this exploratory analysis, I used a newspaper article on Dagens Næringsliv on the page with below url, which lists 1000 (actually 997 but I saw it after I downloaded the table) richest people in Norway in 2013 according to previous year tax documents
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The libraries I need are htmltab for pulling the table from an html page, ggplot2 and pppubr for visualization and dplyr for data modification:
+
+```{r libraries, message=FALSE}
+library(htmltab)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+```
+
+I started with downloading html table to R and making some modifications to replace the column name of birth year (Født) with a Norwegian letter to all English characters and to numeric, commas to dots:
+```{r loading}
+url <- "https://www.dn.no/her-er-norges-1000-rikeste/1-1-2009497"
+rikeste1000 <- htmltab(doc = url, which = "//th[text() = 'Navn']/ancestor::table") 
+rikeste1000 <- rename(rikeste1000, Fodt = Født) %>%
+               mutate(Fodt = as.numeric(Fodt),
+                      Inntekt = as.numeric(gsub(",",".", Inntekt)), 
+                      Skatt = as.numeric(gsub(",",".", Skatt)),
+                      Formue = as.numeric(gsub(",",".", Formue)),
+                      Bosted = as.factor(Bosted))
+```
+
+Checking the lookabouts of table:
+```{r exploration1}
+head(rikeste1000)
+summary(rikeste1000)
+```
+
+First, the distributions of tax (Skatt), income (Inntekt) and wealth (Formue):
+```{r exploration3}
+ggplot(rikeste1000) + geom_boxplot(mapping = aes(y = Skatt))
+ggplot(rikeste1000) + geom_boxplot(mapping = aes(y = Inntekt))
+ggplot(rikeste1000) + geom_boxplot(mapping = aes(y = Formue))
+```
+There are many outliers that generally falls in the higher values for the listed parameters. Without doing anything about these outliers, I checked whether there is any relationship between these parameters with using scatter plots. I also added a regression line with confidence intervals and Pearson correlation value. These plots show very high correlations between income and tax, and wealth and tax, and a low correlation between wealth and income. However, the correlations are obviously affected from the outlier points.
+
+```{r exploration4, message=FALSE}
+ggscatter(data = rikeste1000, x = "Inntekt", y = "Skatt", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+ggscatter(data = rikeste1000, x = "Formue", y = "Skatt", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+ggscatter(data = rikeste1000, x = "Inntekt", y = "Formue", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+```
+
+I removed outlier points/people by using interquartile range in a function named outliers.
+
+```{r outlierRemoval1}
+outliers <- function(x){
+  x > quantile(x)[4] + 1.5*IQR(x) | x < quantile(x)[2] - 1.5*IQR(x)
+}
+
+attach(rikeste1000)
+outlier_inntekt <- sum(outliers(Inntekt))
+outlier_inntekt_index <- which(outliers(Inntekt))
+outlier_skatt <- sum(outliers(Skatt))
+outlier_skatt_index <- which(outliers(Skatt))
+outlier_formue <- sum(outliers(Formue))
+outlier_formue_index <- which(outliers(Formue))
+
+rikeste1000_orem <- slice(rikeste1000, -c(outlier_inntekt_index,outlier_skatt_index, outlier_formue_index)) 
+```
+
+There are total of `r nrow(rikeste1000) - nrow(rikeste1000_orem)` people having an outlier value for any of these 3 parameters, which now filtered out in the new dataset. Also, some people have 0 as income value (`r sum(rikeste1000$income == 0)`) but I will not remove them now. The new scatter plots are below and now the correlations are a bit lower but they seem more consistent with data points. The correlation between wealth and income is much more lower than the initial one.
+
+```{r exploration5, message=FALSE}
+ggscatter(data = rikeste1000_orem, x = "Inntekt", y = "Skatt", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+ggscatter(data = rikeste1000_orem, x = "Formue", y = "Skatt", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+ggscatter(data = rikeste1000_orem, x = "Inntekt", y = "Formue", add = "reg.line", 
+          add.params = list(color = "blue", fill = "lightgray"), 
+          conf.int = TRUE) + stat_cor(method = "pearson")
+```
+
+What else I can do with this data? `r emo::ji("thinking")`. Maybe I can look into the birth year decades! I will use the original dataset for this part.
+
+```{r}
+rikeste1000 <- mutate(rikeste1000, FodtBin = cut(Fodt, breaks =seq(1920, 2000, 10), dig.lab=4)) # since I know minimum and maximum values from summary above
+ggplot(rikeste1000, aes(x=FodtBin)) + 
+  geom_bar() + 
+  theme(axis.text.x = element_text(angle=45, vjust = 0.5)) + # to give an angle to x-axis labels
+  xlab("Birth year") +
+  ylim(NA, 300) + # to set the maximum of y-axis to make count values more visible
+  geom_text(stat='count', aes(label=..count..), vjust=-1) # to add count values on top of bars
+```
+
+It seems like half of the richest people were in their 50s-60s at the time of this publication.
+
+The last thing I want to look here is the places that these people were coming. There are `r group_by(rikeste1000, Bosted) %>% summarise(Unique_Places = n_distinct(Bosted)) %>% nrow(.)` places on Bosted column. That's too much for me. I will try to group these places into a different administrative unit in Norway: Fylke. First, I need another table:
+
+```{r}
+url <- "https://www.kartverket.no/Kunnskap/Fakta-om-Norge/Fylker-og-kommuner/Tabell/"
+fylkeKommune <- htmltab(doc = url, which = "//table[@id='ctl00_FullRegion_UcTableDataGridView_DataTableGridView']") %>% 
+  rename(Bosted = "Kommunar (356)") %>% mutate(Bosted = toupper(Bosted))
+newdf <- left_join(rikeste1000, fylkeKommune, by = "Bosted")
+```
+
+Now, I stuck here since there are `r sum(is.na(newdf$Fylkesnummer))` "Bosted"s that are smaller administrative units than I expected and I couldn't find a source to map them into "Fylke" or "Kommune". To be continued...
+
+
+
+
